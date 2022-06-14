@@ -78,12 +78,16 @@ def visualization(visu, visu_format, data, pred, seg, label, partseg_colors, cla
     global visual_warning
     visu = visu.split('_')
     for i in range(0, data.shape[0]):
+        print('here1')  
+
         RGB = []
         RGB_gt = []
         skip = False
         classname = class_choices[int(label[i])]
         class_index = class_indexs[int(label[i])]
         if visu[0] != 'all':
+            print('here2')  
+
             if len(visu) != 1:
                 if visu[0] != classname or visu[1] != str(class_index):
                     skip = True 
@@ -99,7 +103,8 @@ def visualization(visu, visu_format, data, pred, seg, label, partseg_colors, cla
             visual_warning = False
         if skip:
             class_indexs[int(label[i])] = class_indexs[int(label[i])] + 1
-        else:  
+        else:
+            print('here3')  
             if not os.path.exists('outputs/'+args.exp_name+'/'+'visualization'+'/'+classname):
                 os.makedirs('outputs/'+args.exp_name+'/'+'visualization'+'/'+classname)
             for j in range(0, data.shape[2]):
@@ -112,9 +117,10 @@ def visualization(visu, visu_format, data, pred, seg, label, partseg_colors, cla
             xyz_np = data[i].cpu().numpy()
             xyzRGB = np.concatenate((xyz_np.transpose(1, 0), np.array(RGB)), axis=1)
             xyzRGB_gt = np.concatenate((xyz_np.transpose(1, 0), np.array(RGB_gt)), axis=1)
-            IoU = calculate_shape_IoU(np.array(pred_np), np.array(seg_np), label[i].cpu().numpy(), class_choice, visual=True)
-            IoU = str(round(IoU[0], 4))
-            filepath = 'outputs/'+args.exp_name+'/'+'visualization'+'/'+classname+'/'+classname+'_'+str(class_index)+'_pred_'+IoU+'.'+visu_format
+            # IoU = calculate_shape_IoU(np.array(pred_np), np.array(seg_np), label[i].cpu().numpy(), class_choice, visual=True)
+            # IoU = str(round(IoU[0], 4))
+            filepath = 'outputs/'+args.exp_name+'/'+'visualization'+'/'+classname+'/'+classname+'_'+str(class_index)+'_pred_'+'.'+visu_format
+            # filepath = 'outputs/'+args.exp_name+'/'+'visualization'+'/'+classname+'/'+classname+'_'+str(class_index)+'_pred_'+IoU+'.'+visu_format
             filepath_gt = 'outputs/'+args.exp_name+'/'+'visualization'+'/'+classname+'/'+classname+'_'+str(class_index)+'_gt.'+visu_format
             if visu_format=='txt':
                 np.savetxt(filepath, xyzRGB, fmt='%s', delimiter=' ') 
@@ -287,6 +293,39 @@ def train(args, io):
             best_test_iou = np.mean(test_ious)
             torch.save(model.state_dict(), 'outputs/%s/models/model.t7' % args.exp_name)
 
+from utils.points import regularize_pc_point_count
+
+import pickle
+
+def get_real_pc(cat, trial):
+    with open(f'/home/gpupc2/GRASP/grasper/pat_semantic/{cat}/trial{trial}/{cat}.pkl', 'rb') as fp:
+        data = np.array(pickle.load(fp))
+        pc = data[:,:3]
+    pc = regularize_pc_point_count(pc, 2048, False)
+    return pc
+
+
+def read_pc(cat, id, view_size=4):
+
+
+    with open(f'/home/gpupc2/GRASP/grasp_network/data/pcs/{cat}/{cat}{id:03}.pkl', 'rb') as fp:
+        data = pickle.load(fp)
+        obj_pose_relative = data['obj_pose_relative']
+        pcs = data['pcs']
+    
+    pc_indcs = np.random.randint(low=0, high=999, size=view_size)
+    
+    if len(pc_indcs) == 1:
+        pc = pcs[pc_indcs[0]]
+    else:
+        __pcs = []
+        for pc_index in pc_indcs:
+            __pcs = __pcs + [pcs[pc_index]]
+        pc = np.concatenate( __pcs )
+   
+    pc = regularize_pc_point_count(pc, 2048, False)
+    return pc, obj_pose_relative
+    
 
 def test(args, io):
     test_loader = DataLoader(ShapeNetPart(partition='test', num_points=args.num_points, class_choice=args.class_choice),
@@ -296,6 +335,7 @@ def test(args, io):
     #Try to load models
     seg_num_all = test_loader.dataset.seg_num_all
     seg_start_index = test_loader.dataset.seg_start_index
+
     partseg_colors = test_loader.dataset.partseg_colors
     if args.model == 'dgcnn':
         model = DGCNN_partseg(args, seg_num_all).to(device)
@@ -312,7 +352,76 @@ def test(args, io):
     test_true_seg = []
     test_pred_seg = []
     test_label_seg = []
+
+    #########################
+    # Get data from PC
+    #########################
+    pc, _ = read_pc(cat='hammer', id=1, view_size=4)
+    
+    # pc = get_real_pc(cat='hammer', trial=3)
+    # pc -= np.mean(pc, axis=0)
+    # pc[:, 1] -=0.15
+
+    # print(pc.shape)
+    pc = np.expand_dims(pc, axis=0)
+    # print(pc.shape)
+    data = torch.from_numpy(pc.astype(np.float32))
+
+    # print(data.size())
+
+    seg = torch.zeros((1,2048)) + 7
+    # print(f"seg: {seg}")
+    # exit()
+
+    # seg = seg - seg_start_index
+
+    label = torch.Tensor([[7]]) # 7 - knife, 11 - mug
+    # label = torch.Tensor([[11]]) # 7 - knife, 11 - mug
+    label_one_hot = np.zeros((1, 16))
+    label_one_hot[0,7] = 1
+    label_one_hot = torch.from_numpy(label_one_hot.astype(np.float32))
+
+    # label_one_hot = np.zeros((label.shape[0], 16))
+    # for idx in range(label.shape[0]):
+    #     label_one_hot[idx, label[idx]] = 1
+    # label_one_hot = torch.from_numpy(label_one_hot.astype(np.float32))
+
+
+
+    data, label_one_hot, seg = data.to(device), label_one_hot.to(device), seg.to(device)
+    data = data.permute(0, 2, 1)
+    batch_size = data.size()[0]
+    print(data.size())
+    print(label_one_hot.size())
+    seg_pred = model(data, label_one_hot)
+    print(seg_pred)
+    print(seg_pred.shape)
+    
+    # exit()
+    seg_pred = seg_pred.permute(0, 2, 1).contiguous()
+    pred = seg_pred.max(dim=2)[1]
+    seg_np = seg.cpu().numpy()
+    pred_np = pred.detach().cpu().numpy()
+    # print(torch.unique(pred))
+    print(pred.shape)
+    test_true_cls.append(seg_np.reshape(-1))
+    test_pred_cls.append(pred_np.reshape(-1))
+    test_true_seg.append(seg_np)
+    test_pred_seg.append(pred_np)
+    test_label_seg.append(label.reshape(-1))
+    # visiualization
+    np.savez_compressed('/home/gpupc2/GRASP/grasper/pat_semantic/hammer', data=data.cpu(), pred=pred.cpu())
+
+    visualization(args.visu, args.visu_format, data, pred, seg, label, partseg_colors, args.class_choice)
+
+    exit()
+
     for data, label, seg in test_loader:
+        # print(data.shape)
+        # print(label.shape)
+        # print(seg)
+        # print(seg.shape)
+        # exit()
         seg = seg - seg_start_index
         label_one_hot = np.zeros((label.shape[0], 16))
         for idx in range(label.shape[0]):
@@ -332,7 +441,8 @@ def test(args, io):
         test_pred_seg.append(pred_np)
         test_label_seg.append(label.reshape(-1))
         # visiualization
-        visualization(args.visu, args.visu_format, data, pred, seg, label, partseg_colors, args.class_choice) 
+        visualization(args.visu, args.visu_format, data, pred, seg, label, partseg_colors, args.class_choice)
+    
     if visual_warning and args.visu != '':
         print('Visualization Failed: You can only choose a point cloud shape to visualize within the scope of the test class')
     test_true_cls = np.concatenate(test_true_cls)
