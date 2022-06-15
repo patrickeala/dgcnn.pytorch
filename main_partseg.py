@@ -9,6 +9,7 @@
 
 
 from __future__ import print_function
+from math import degrees
 import os
 import argparse
 import torch
@@ -23,6 +24,8 @@ from torch.utils.data import DataLoader
 from util import cal_loss, IOStream
 import sklearn.metrics as metrics
 from plyfile import PlyData, PlyElement
+import open3d as o3d
+
 
 global class_cnts
 class_indexs = np.zeros((16,), dtype=int)
@@ -308,7 +311,7 @@ def get_real_pc(cat, trial):
 def read_pc(cat, id, view_size=4):
 
 
-    with open(f'/home/gpupc2/GRASP/grasp_network/data/pcs/{cat}/{cat}{id:03}.pkl', 'rb') as fp:
+    with open(f'home/gpupc2/GRASP/grasp_network/data/pcs/{cat}/{cat}{id:03}.pkl', 'rb') as fp:
         data = pickle.load(fp)
         obj_pose_relative = data['obj_pose_relative']
         pcs = data['pcs']
@@ -356,11 +359,32 @@ def test(args, io):
     #########################
     # Get data from PC
     #########################
-    pc, _ = read_pc(cat='hammer', id=1, view_size=4)
+    # pc, _ = read_pc(cat='mug', id=0, view_ssize=4)
+    # pc = get_real_pc(cat='mug', trial=1)
     
+    pc = get_real_pc(cat='black_spatula', trial=1)
     # pc = get_real_pc(cat='hammer', trial=3)
-    # pc -= np.mean(pc, axis=0)
-    # pc[:, 1] -=0.15
+    # pc = get_real_pc(cat='sugar_box', trial=3)
+    pc -= np.mean(pc, axis=0)
+    pc[:, 1] +=0.01
+    
+    
+    
+    quaternion = None
+    translation = None
+
+    euler = [120,0,0]
+    from scipy.spatial.transform import Rotation as R
+    r = R.from_euler( "xyz",euler, degrees=True) 
+    transform = np.eye(4)
+    transform[:3,:3] = r.as_matrix()
+    transform[:3,3] = translation
+
+
+    pc = pc @ np.linalg.inv(transform[:3,:3])
+        
+    # final_pts += np.expand_dims(transform[]:3,3], axis=1)
+
 
     # print(pc.shape)
     pc = np.expand_dims(pc, axis=0)
@@ -375,10 +399,12 @@ def test(args, io):
 
     # seg = seg - seg_start_index
 
-    label = torch.Tensor([[7]]) # 7 - knife, 11 - mug
-    # label = torch.Tensor([[11]]) # 7 - knife, 11 - mug
+    # label = torch.Tensor([[9]]) # 7 - knife, 11 - mug
+    #  1 - bag, working for spatula
+    class_id = 7
+    label = torch.Tensor([[class_id]]) # 7 - knife, 11 - mug
     label_one_hot = np.zeros((1, 16))
-    label_one_hot[0,7] = 1
+    label_one_hot[0,class_id] = 1
     label_one_hot = torch.from_numpy(label_one_hot.astype(np.float32))
 
     # label_one_hot = np.zeros((label.shape[0], 16))

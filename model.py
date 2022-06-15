@@ -211,6 +211,12 @@ class Transform_Net(nn.Module):
         return x
 
 
+
+
+
+
+
+
 class DGCNN_partseg(nn.Module):
     def __init__(self, args, seg_num_all):
         super(DGCNN_partseg, self).__init__()
@@ -310,6 +316,100 @@ class DGCNN_partseg(nn.Module):
         x = self.conv11(x)                      # (batch_size, 256, num_points) -> (batch_size, seg_num_all, num_points)
         
         return x
+
+
+from scipy.spatial.transform import Rotation as R
+
+class DGCNN_semantic_grasp(nn.Module):
+    def __init__(self, args):
+        super(DGCNN_semantic_grasp, self).__init__()
+        self.args = args
+
+        # loading dgcnn
+        self.device = torch.device("cuda" if args.cuda else "cpu")
+        self.seg_model = DGCNN_partseg(args, args.seg_num).to(self.device)
+        self.seg_model = nn.DataParallel(self.seg_model)
+        self.seg_model.load_state_dict(torch.load('pretrained/model.partseg.t7'))
+        self.seg_model.eval()
+
+    def get_transformed_handle(self, transform):
+        # transform B x 4 X 4
+        gripper_pts = np.array([
+            [-0.0, 0.0000599553131906, 0.0672731392979622],
+            [-0.0, 0.0000599553131906, -0.0032731392979622]
+        ])
+
+        final_pts = gripper_pts @ np.linalg.inv(transform[:, :3,:3])
+        
+        final_pts += np.expand_dims(transform[:,:3,3], axis=1)
+        return torch.from_numpy(final_pts)
+
+    def get_distance_from_clusters(self, point, centroid1, centroid2):
+        cents = torch.cat((centroid1, centroid2), 0)
+        dists = torch.cdist(point, cents, p=2.0)
+        return dists
+
+    def forward(self, quaternion, translation, pc, label_one_hot):
+
+        r = R.from_quat(quaternion.detach().cpu())
+        transform = np.eye(4)
+        transform[:3,:3] = r.as_matrix()
+        transform[:3,3] = translation.detach().cpu()
+
+
+
+        # transform = transform.e
+        transform = np.random.randn(10,4,4)
+        handle_pts = self.get_transformed_handle(transform)
+
+        ###############
+        # B X 2 X 3
+        ###############
+
+        # print(handle_pts.size())
+        # exit()
+
+        # PC: B x 3 x 2048
+        # label: B x 16
+        pc = torch.randn(10,3,2048).to(self.device)
+        label_one_hot = torch.randn(10,16).to(self.device)
+        seg_pred = self.seg_model(pc, label_one_hot)
+        
+        # seg_pred: B x 50 x 2048
+
+        pred = seg_pred.max(dim=1)[1]
+        pred -= torch.min(pred)
+
+        # pred: B x 2048
+        
+        pc = pc.permute(0, 2, 1)
+        # PC: B x 2048 x 3
+
+
+        print((pred==1).size())
+        cluster1 = pc[pred==0]
+        cluster2 = pc[pred==1]
+        print(cluster1.size())
+        exit()
+        
+        # cent1 = torch.mean(cluster1, 0)
+        # cent2 = torch.mean(cluster2, 0)
+        # print(cent1.size())
+        # print(cent2.size())
+
+        # exit()
+
+
+        cent1 = torch.mean(pc[pred==0], 0)
+        cent2 = torch.mean(pc[pred==1], 0)
+
+        scores = self.get_distance_from_clusters(handle_pts[:,0], cent1, cent2)
+        return scores
+
+        
+
+
+
 
 
 class DGCNN_semseg(nn.Module):
